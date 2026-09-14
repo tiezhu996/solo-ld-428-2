@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env.local
+.DS_Store
+*.log
+*.tsbuildinfo
+frontend/.vite/
+backend/.turbo/
