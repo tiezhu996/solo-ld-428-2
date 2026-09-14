@@ -62,8 +62,11 @@ def gen_loan_no(conn):
 
 
 def conflict_check(conn, artwork_id, start, end, exclude_loan_id=None):
-    """检查单件作品在 [start, end] 内是否与已有（非取消、非草稿）借展冲突。
+    """检查单件作品在 [start, end] 内是否与未结束借展冲突。
 
+    只有仍占档期的状态（pending 待出库 / outgoing 在途 / active 借展中）参与判断；
+    已归还（returned）的历史借展与已取消（cancelled）借展均不再阻止同一作品再次出借，
+    即使新借展日期与历史时段重叠。
     区间重叠判定：既有开始 <= 新结束 且 既有结束 >= 新开始。
     同一张借展单编辑时通过 exclude_loan_id 排除自身。
     返回冲突借展信息 dict 或 None。
@@ -75,7 +78,7 @@ def conflict_check(conn, artwork_id, start, end, exclude_loan_id=None):
         JOIN loan l ON l.id = la.loan_id
         JOIN institution i ON i.id = l.institution_id
         WHERE la.artwork_id = ?
-          AND l.status NOT IN ('cancelled')
+          AND l.status IN ('pending','outgoing','active')
           AND l.start_date <= ? AND l.end_date >= ?
     """
     params = [artwork_id, end.isoformat(), start.isoformat()]

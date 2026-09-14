@@ -13,6 +13,37 @@ EDITABLE_STATUSES = ("pending",)          # 待出库可完整编辑
 DATE_EDITABLE_STATUSES = ("pending", "outgoing", "active")  # 进行中仅可调日期
 
 
+def normalize_artwork_ids(raw):
+    """把请求中的 artwork_ids 规整为去重后的 int 列表。
+
+    同一张借展单重复选择同一作品时，明确返回 400（提示哪些编号重复），
+    不做任何写入，避免主键冲突冒泡成 500。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ApiError(400, "作品参数不合法")
+    ids = []
+    dup_titles = []
+    seen = set()
+    for x in raw:
+        try:
+            aid = int(x)
+        except (TypeError, ValueError):
+            raise ApiError(400, "作品参数不合法")
+        if aid in seen:
+            dup_titles.append(f"#{aid}")
+        else:
+            seen.add(aid)
+            ids.append(aid)
+    if dup_titles:
+        raise ApiError(
+            400,
+            f"同一作品在借展单中重复选择（{ '、'.join(dup_titles) }），每件作品只能选择一次；数据未改动",
+        )
+    return ids
+
+
 def _load_artwork_ids(conn, loan_id):
     rows = conn.execute(
         "SELECT artwork_id FROM loan_artwork WHERE loan_id=?", (loan_id,)
@@ -145,13 +176,9 @@ def create_loan(body, params, query):
     end = parse_date(body.get("end_date"), "借展结束日期")
     if end < start:
         raise ApiError(400, "结束日期不能早于开始日期")
-    artwork_ids = body.get("artwork_ids") or []
+    artwork_ids = normalize_artwork_ids(body.get("artwork_ids"))
     if not artwork_ids:
         raise ApiError(400, "请至少选择一件借出作品")
-    try:
-        artwork_ids = [int(x) for x in artwork_ids]
-    except (TypeError, ValueError):
-        raise ApiError(400, "作品参数不合法")
 
     conn = get_conn()
     try:
@@ -235,15 +262,11 @@ def update_loan(body, params, query):
         if loan["status"] not in EDITABLE_STATUSES and body.get("artwork_ids") is not None:
             raise ApiError(409, "借展单已出库，不能增减作品；如需调整请新建借展单")
 
-        artwork_ids = body.get("artwork_ids")
-        if artwork_ids is not None:
-            try:
-                artwork_ids = [int(x) for x in artwork_ids]
-            except (TypeError, ValueError):
-                raise ApiError(400, "作品参数不合法")
-            if not artwork_ids:
-                raise ApiError(400, "请至少选择一件借出作品")
+        artwork_ids = normalize_artwork_ids(body.get("artwork_ids"))
+        if artwork_ids is not None and not artwork_ids:
+            raise ApiError(400, "请至少选择一件借出作品")
 
+        if artwork_ids is not None:
             conflicts = []
             for aid in artwork_ids:
                 if not conn.execute("SELECT 1 FROM artwork WHERE id=?", (aid,)).fetchone():
